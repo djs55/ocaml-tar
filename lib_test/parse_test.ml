@@ -12,7 +12,8 @@
  * GNU Lesser General Public License for more details.
  *)
 open OUnit
-open Tar_lwt
+open Tar_lwt_unix
+open Lwt
 
 exception Cstruct_differ
 
@@ -54,7 +55,7 @@ let with_tar f =
   begin match Unix.system cmdline with
   | Unix.WEXITED 0 -> ()
   | Unix.WEXITED n -> failwith (Printf.sprintf "%s: exited with %d" cmdline n)
-  | _ -> failwith "%s: unknown error" cmdline
+  | _ -> failwith (Printf.sprintf "%s: unknown error" cmdline)
   end;
   finally (fun () -> f tar_filename files) (fun () -> Unix.unlink tar_filename)
 
@@ -62,7 +63,7 @@ let can_read_tar () =
   with_tar
     (fun tar_filename files ->
       let fd = Unix.openfile tar_filename [ Unix.O_RDONLY ] 0 in
-      let files' = List.map (fun t -> t.Header.file_name) (Archive.list fd) in
+      let files' = List.map (fun t -> t.Tar_unix.Header.file_name) (Tar_unix.Archive.list fd) in
       Unix.close fd;
       let missing = set_difference files files' in
       let missing' = set_difference files' files in
