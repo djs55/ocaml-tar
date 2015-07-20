@@ -36,8 +36,9 @@ let header () =
   let c = Cstruct.create (String.length txt) in
   Cstruct.blit_from_string txt 0 c 0 (String.length txt);
   let c' = Cstruct.create Header.length in
+  for i = 0 to Header.length - 1 do Cstruct.set_uint8 c' i 0 done;
   Header.marshal c' h;
-  assert_equal ~cmp:cstruct_equal c c';
+  assert_equal ~printer:(fun x -> String.escaped (Cstruct.to_string x)) ~cmp:cstruct_equal c c';
   let printer = function
     | None -> "None"
     | Some x -> "Some " ^ (Header.to_detailed_string x) in
@@ -75,11 +76,44 @@ let expect_ok = function
   | `Ok x -> x
   | `Error _ -> failwith "expect_ok: got Error"
 
+module Block4096 = struct
+  include Block
+
+  let get_info b =
+    Block.get_info b
+    >>= fun info ->
+    return { info with Block.sector_size = 4096; size_sectors = Int64.div info.size_sectors 8L }
+
+  let read b ofs bufs =
+    Block.get_info b
+    >>= fun info ->
+    let len = List.fold_left (+) 0 (List.map Cstruct.len bufs) in
+    let requested_end = Int64.(add (mul ofs 4096L) (of_int len)) in
+    let end_of_file = Int64.(mul info.size_sectors (of_int info.sector_size)) in
+    let need_to_trim = max 0L (Int64.sub requested_end end_of_file) |> Int64.to_int in
+    let need_to_keep = len - need_to_trim in
+    let rec trimmed len = function
+      | [] -> []
+      | b :: bs ->
+        let b' = Cstruct.len b in
+        for i = 0 to b' do Cstruct.set_uint8 b 0 0 done;
+        let to_drop = max 0 (len + b' - need_to_keep) in
+        let to_keep = max 0 (b' - to_drop) in
+        Cstruct.sub b 0 to_keep :: (trimmed (len + b') bs) in
+    let trimmed =  (trimmed 0 bufs) in
+    Block.read b (Int64.mul ofs 8L) trimmed
+end
+
+module type BLOCK = sig
+  include V1_LWT.BLOCK
+  val connect: string -> [ `Ok of t | `Error of error ] Lwt.t
+end
+
+module Test(Block: BLOCK) = struct
 let can_read_through_BLOCK () =
   with_tar
     (fun tar_filename files ->
       let t =
-Printf.fprintf stderr "%s\n%!" tar_filename;
         Block.connect tar_filename
         >>= fun r ->
         let b = expect_ok r in
@@ -89,7 +123,6 @@ Printf.fprintf stderr "%s\n%!" tar_filename;
         let k = expect_ok r in
         Lwt_list.iter_s
           (fun file ->
-Printf.fprintf stderr "%s\n%!" file;
             KV_RO.size k file
             >>= fun r ->
             let size = expect_ok r in
@@ -126,7 +159,11 @@ Printf.fprintf stderr "%s\n%!" file;
           ) files in
       Lwt_main.run t
     )
-        
+end
+
+module Sector512 = Test(Block)
+module Sector4096 = Test(Block4096)
+ 
 let _ =
   let verbose = ref false in
   Arg.parse [
@@ -138,7 +175,8 @@ let _ =
     [
       "header" >:: header;
       "can_read_tar" >:: can_read_tar;
-      "can_read_through_BLOCK" >:: can_read_through_BLOCK;
+      "can_read_through_BLOCK/512" >:: Sector512.can_read_through_BLOCK;
+      "can_read_through_BLOCK/4096" >:: Sector4096.can_read_through_BLOCK;
      ] in
   run_test_tt ~verbose:!verbose suite
 
