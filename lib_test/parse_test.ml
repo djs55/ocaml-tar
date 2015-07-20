@@ -12,7 +12,7 @@
  * GNU Lesser General Public License for more details.
  *)
 open OUnit
-open Tar_unix
+open Tar_lwt
 
 exception Cstruct_differ
 
@@ -45,7 +45,9 @@ let header () =
 
 let set_difference a b = List.filter (fun a -> not(List.mem a b)) a
 
-let can_read_tar () =
+let finally f g = try let results = f () in g (); results with e -> g (); raise e
+
+let with_tar f =
   let files = List.map (fun x -> "lib/" ^ x) (Array.to_list (Sys.readdir "lib")) in
   let tar_filename = Filename.temp_file "tar-test" ".tar" in
   let cmdline = Printf.sprintf "tar -cf %s %s" tar_filename (String.concat " " files) in
@@ -54,15 +56,44 @@ let can_read_tar () =
   | Unix.WEXITED n -> failwith (Printf.sprintf "%s: exited with %d" cmdline n)
   | _ -> failwith "%s: unknown error" cmdline
   end;
-  let fd = Unix.openfile tar_filename [ Unix.O_RDONLY ] 0 in
-  let files' = List.map (fun t -> t.Header.file_name) (Archive.list fd) in
-  Unix.close fd;
-  Unix.unlink tar_filename;
-  let missing = set_difference files files' in
-  let missing' = set_difference files' files in
-  assert_equal ~printer:(String.concat "; ") [] missing;
-  assert_equal ~printer:(String.concat "; ") [] missing'
+  finally (fun () -> f tar_filename files) (fun () -> Unix.unlink tar_filename)
 
+let can_read_tar () =
+  with_tar
+    (fun tar_filename files ->
+      let fd = Unix.openfile tar_filename [ Unix.O_RDONLY ] 0 in
+      let files' = List.map (fun t -> t.Header.file_name) (Archive.list fd) in
+      Unix.close fd;
+      let missing = set_difference files files' in
+      let missing' = set_difference files' files in
+      assert_equal ~printer:(String.concat "; ") [] missing;
+      assert_equal ~printer:(String.concat "; ") [] missing'
+    )
+
+let expect_ok = function
+  | `Ok x -> x
+  | `Error _ -> failwith "expect_ok: got Error"
+
+let can_read_through_BLOCK () =
+  with_tar
+    (fun tar_filename files ->
+      let t =
+        Block.connect tar_filename
+        >>= fun r ->
+        let b = expect_ok r in
+        let module KV_RO = Tar_mirage.Make(Block) in
+        Lwt_list.iter_s
+          (fun file ->
+            KV_RO.size b file
+            >>= fun r ->
+            let size = expect_ok r in
+            let stats = Unix.stat ("lib/" ^ file) in
+            assert_equal ~printer:int_of_string stats.Unix.st_size size;
+            return ()
+          ) files in
+      Lwt_main.run t
+    )
+        
 let _ =
   let verbose = ref false in
   Arg.parse [
@@ -74,6 +105,7 @@ let _ =
     [
       "header" >:: header;
       "can_read_tar" >:: can_read_tar;
+      "can_read_through_BLOCK" >:: can_read_through_BLOCK;
      ] in
   run_test_tt ~verbose:!verbose suite
 
