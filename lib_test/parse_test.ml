@@ -93,7 +93,7 @@ Printf.fprintf stderr "%s\n%!" file;
             KV_RO.size k file
             >>= fun r ->
             let size = expect_ok r in
-            let stats = Unix.LargeFile.stat ("lib/" ^ file) in
+            let stats = Unix.LargeFile.stat file in
             assert_equal ~printer:Int64.to_string stats.Unix.LargeFile.st_size size;
             return ()
           ) files in
