@@ -95,7 +95,34 @@ Printf.fprintf stderr "%s\n%!" file;
             let size = expect_ok r in
             let stats = Unix.LargeFile.stat file in
             assert_equal ~printer:Int64.to_string stats.Unix.LargeFile.st_size size;
-            return ()
+            let read_file key ofs len =
+              let fd = Unix.openfile key [ Unix.O_RDONLY ] 0 in
+              finally
+                (fun () ->
+                  let (_: int) = Unix.lseek fd ofs Unix.SEEK_SET in
+                  let buf = String.make len '\000' in
+                  let len' = Unix.read fd buf 0 len in
+                  assert_equal ~printer:string_of_int len len';
+                  buf
+                ) (fun () -> Unix.close fd) in
+            let read_tar key ofs len =
+               KV_RO.read k key ofs len
+               >>= function
+               | `Error _ -> failwith "KV_RO.read"
+               | `Ok bufs -> return (String.concat "" (List.map Cstruct.to_string bufs)) in
+            (* Read whole file *)
+            let size = Int64.to_int stats.Unix.LargeFile.st_size in
+            let value = read_file file 0 size in
+            read_tar file 0 size
+            >>= fun value' ->
+            assert_equal ~printer:(fun x -> x) value value';
+            if size > 2 then begin
+              let value = read_file file 1 (size - 2) in
+              read_tar file 1 (size - 2)
+              >>= fun value' ->
+              assert_equal ~printer:(fun x -> x) value value';
+              return ()
+            end else return ()
           ) files in
       Lwt_main.run t
     )
