@@ -79,17 +79,22 @@ let can_read_through_BLOCK () =
   with_tar
     (fun tar_filename files ->
       let t =
+Printf.fprintf stderr "%s\n%!" tar_filename;
         Block.connect tar_filename
         >>= fun r ->
         let b = expect_ok r in
-        let module KV_RO = Tar_mirage.Make(Block) in
+        let module KV_RO = Tar_mirage.Make_KV_RO(Block) in
+        KV_RO.connect b
+        >>= fun r ->
+        let k = expect_ok r in
         Lwt_list.iter_s
           (fun file ->
-            KV_RO.size b file
+Printf.fprintf stderr "%s\n%!" file;
+            KV_RO.size k file
             >>= fun r ->
             let size = expect_ok r in
-            let stats = Unix.stat ("lib/" ^ file) in
-            assert_equal ~printer:int_of_string stats.Unix.st_size size;
+            let stats = Unix.LargeFile.stat ("lib/" ^ file) in
+            assert_equal ~printer:Int64.to_string stats.Unix.LargeFile.st_size size;
             return ()
           ) files in
       Lwt_main.run t
