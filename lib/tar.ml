@@ -259,9 +259,8 @@ module Header = struct
       if checksum c <> chksum then raise Checksum_mismatch
       else let ustar =
              let magic = unmarshal_string (copy_hdr_magic c) in
-Printf.fprintf stderr "magic = [%s](%d)\n%!" (String.escaped magic) (String.length magic);
              (* GNU tar and Posix differ in interpretation of the character following ustar. For Posix, it should be '\0' but GNU tar uses ' ' *)
-             (* String.length magic >= 5 &&*) (String.sub magic 0 5 = "ustar") in
+             String.length magic >= 5 && (String.sub magic 0 5 = "ustar") in
            let prefix = if ustar then unmarshal_string (copy_hdr_prefix c) else "" in
            let file_name =
              let file_name = unmarshal_string (copy_hdr_file_name c) in
